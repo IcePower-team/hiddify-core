@@ -1,3 +1,5 @@
+// Package hcore — personal fork (IcePower-team): local BoxService replaces
+// the libbox BoxService removed in sing-box v1.15.
 package hcore
 
 import (
