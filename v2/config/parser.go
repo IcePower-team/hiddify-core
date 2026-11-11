@@ -11,6 +11,7 @@ import (
 
 	"github.com/hiddify/ray2sing/ray2sing"
 	"github.com/sagernet/sing-box/experimental/libbox"
+	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/batch"
 	SJ "github.com/sagernet/sing/common/json"
@@ -21,6 +22,12 @@ import (
 
 //go:embed config.json.template
 var configByte []byte
+
+// singboxContext builds the context carrying the sing-box option registries,
+// which the context-aware option marshal/unmarshal needs.
+func singboxContext() context.Context {
+	return include.Context(context.Background())
+}
 
 func ParseConfig(path string, debug bool) ([]byte, error) {
 	content, err := os.ReadFile(path)
@@ -36,8 +43,7 @@ func ParseConfigContentToOptions(contentstr string, debug bool, configOpt *Hiddi
 	if err != nil {
 		return nil, err
 	}
-	var options option.Options
-	err = json.Unmarshal(content, &options)
+	options, err := SJ.UnmarshalExtendedContext[option.Options](singboxContext(), content)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +82,7 @@ func ParseConfigContent(contentstr string, debug bool, configOpt *HiddifyOptions
 		return patchConfig(newContent, "SingboxParser", configOpt)
 	}
 
-	v2rayStr, err := ray2sing.Ray2Singbox(string(content), configOpt.UseXrayCoreWhenPossible)
+	v2rayStr, err := ray2sing.Ray2Singbox(context.Background(), string(content), configOpt.UseXrayCoreWhenPossible)
 	if err == nil {
 		return patchConfig([]byte(v2rayStr), "V2rayParser", configOpt)
 	}
@@ -102,32 +108,54 @@ func ParseConfigContent(contentstr string, debug bool, configOpt *HiddifyOptions
 }
 
 func patchConfig(content []byte, name string, configOpt *HiddifyOptions) ([]byte, error) {
-	options := option.Options{}
-	err := json.Unmarshal(content, &options)
+	options, err := SJ.UnmarshalExtendedContext[option.Options](singboxContext(), content)
 	if err != nil {
 		return nil, fmt.Errorf("[SingboxParser] unmarshal error: %w", err)
 	}
-	b, _ := batch.New(context.Background(), batch.WithConcurrencyNum[*option.Outbound](2))
+	// A custom warp outbound converts into a WireGuard endpoint here; the
+	// batch result carries either the patched outbound or the new endpoint.
+	type patchWarpResult struct {
+		outbound *option.Outbound
+		endpoint *option.Endpoint
+	}
+	b, _ := batch.New(context.Background(), batch.WithConcurrencyNum[patchWarpResult](2))
 	for _, base := range options.Outbounds {
 		out := base
-		b.Go(base.Tag, func() (*option.Outbound, error) {
-			err := patchWarp(&out, configOpt, false, nil)
-			if err != nil {
-				return nil, fmt.Errorf("[Warp] patch warp error: %w", err)
+		b.Go(base.Tag, func() (patchWarpResult, error) {
+			if ep, converted, err := warpOutboundToEndpoint(out, configOpt, false, nil); err != nil {
+				return patchWarpResult{}, fmt.Errorf("[Warp] patch warp error: %w", err)
+			} else if converted {
+				return patchWarpResult{endpoint: ep}, nil
 			}
-			// options.Outbounds[i] = base
-			return &out, nil
+			return patchWarpResult{outbound: &out}, nil
 		})
 	}
 	if res, err := b.WaitAndGetResult(); err != nil {
 		return nil, err
 	} else {
-		for i, base := range options.Outbounds {
-			options.Outbounds[i] = *res[base.Tag].Value
+		var outbounds []option.Outbound
+		var endpoints []option.Endpoint
+		for _, base := range options.Outbounds {
+			result := res[base.Tag].Value
+			if result.endpoint != nil {
+				endpoints = append(endpoints, *result.endpoint)
+			} else if result.outbound != nil {
+				outbounds = append(outbounds, *result.outbound)
+			}
 		}
+		options.Outbounds = outbounds
+		options.Endpoints = append(options.Endpoints, endpoints...)
 	}
 
-	content, _ = json.MarshalIndent(options, "", "  ")
+	compact, err := SJ.MarshalContext(singboxContext(), options)
+	if err != nil {
+		return nil, fmt.Errorf("[SingboxParser] marshal error: %w", err)
+	}
+	var indented bytes.Buffer
+	if err := json.Indent(&indented, compact, "", "  "); err != nil {
+		return nil, fmt.Errorf("[SingboxParser] marshal error: %w", err)
+	}
+	content = indented.Bytes()
 
 	// fmt.Printf("%s\n", content)
 	return validateResult(content, name)

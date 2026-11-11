@@ -7,6 +7,7 @@ import (
 
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
 )
 
 type outboundMap map[string]interface{}
@@ -36,15 +37,16 @@ func patchOutboundTLSTricks(base option.Outbound, configOpt HiddifyOptions, obj 
 
 	var tls *option.OutboundTLSOptions
 	var transport *option.V2RayTransportOptions
-	if base.VLESSOptions.OutboundTLSOptionsContainer.TLS != nil {
-		tls = base.VLESSOptions.OutboundTLSOptionsContainer.TLS
-		transport = base.VLESSOptions.Transport
-	} else if base.TrojanOptions.OutboundTLSOptionsContainer.TLS != nil {
-		tls = base.TrojanOptions.OutboundTLSOptionsContainer.TLS
-		transport = base.TrojanOptions.Transport
-	} else if base.VMessOptions.OutboundTLSOptionsContainer.TLS != nil {
-		tls = base.VMessOptions.OutboundTLSOptionsContainer.TLS
-		transport = base.VMessOptions.Transport
+	switch opts := base.Options.(type) {
+	case option.VLESSOutboundOptions:
+		tls = opts.OutboundTLSOptionsContainer.TLS
+		transport = opts.Transport
+	case option.TrojanOutboundOptions:
+		tls = opts.OutboundTLSOptionsContainer.TLS
+		transport = opts.Transport
+	case option.VMessOutboundOptions:
+		tls = opts.OutboundTLSOptionsContainer.TLS
+		transport = opts.Transport
 	}
 
 	if base.Type == C.TypeDirect {
@@ -107,34 +109,38 @@ func isOutboundReality(base option.Outbound) bool {
 	if base.Type != C.TypeVLESS {
 		return false
 	}
-	if base.VLESSOptions.OutboundTLSOptionsContainer.TLS == nil {
+	opts, ok := base.Options.(option.VLESSOutboundOptions)
+	if !ok || opts.OutboundTLSOptionsContainer.TLS == nil {
 		return false
 	}
-	if base.VLESSOptions.OutboundTLSOptionsContainer.TLS.Reality == nil {
+	if opts.OutboundTLSOptionsContainer.TLS.Reality == nil {
 		return false
 	}
-	return base.VLESSOptions.OutboundTLSOptionsContainer.TLS.Reality.Enabled
+	return opts.OutboundTLSOptionsContainer.TLS.Reality.Enabled
 }
 
-func patchOutbound(base option.Outbound, configOpt HiddifyOptions, dns *option.DNSOptions) (*option.Outbound, error) {
+func patchOutbound(base option.Outbound, configOpt HiddifyOptions, staticIPs map[string][]string) (*option.Outbound, *option.Endpoint, error) {
 	formatErr := func(err error) error {
 		return fmt.Errorf("error patching outbound[%s][%s]: %w", base.Tag, base.Type, err)
 	}
-	err := patchWarp(&base, &configOpt, true, dns.StaticIPs)
-	if err != nil {
-		return nil, formatErr(err)
+	// A custom warp outbound becomes a WireGuard endpoint in the new API.
+	if ep, converted, err := warpOutboundToEndpoint(base, &configOpt, true, staticIPs); err != nil {
+		return nil, nil, formatErr(err)
+	} else if converted {
+		return nil, ep, nil
 	}
 	var outbound option.Outbound
 
-	jsonData, err := base.MarshalJSON()
+	ctx := singboxContext()
+	jsonData, err := SJ.MarshalContext(ctx, base)
 	if err != nil {
-		return nil, formatErr(err)
+		return nil, nil, formatErr(err)
 	}
 
 	var obj outboundMap
 	err = json.Unmarshal(jsonData, &obj)
 	if err != nil {
-		return nil, formatErr(err)
+		return nil, nil, formatErr(err)
 	}
 
 	obj = patchOutboundTLSTricks(base, configOpt, obj)
@@ -143,18 +149,18 @@ func patchOutbound(base option.Outbound, configOpt HiddifyOptions, dns *option.D
 	case C.TypeVMess, C.TypeVLESS, C.TypeTrojan, C.TypeShadowsocks:
 		obj = patchOutboundMux(base, configOpt, obj)
 	}
-	obj = patchOutboundXray(base, configOpt, obj, dns.StaticIPs)
+	obj = patchOutboundXray(base, configOpt, obj, staticIPs)
 	modifiedJson, err := json.Marshal(obj)
 	if err != nil {
-		return nil, formatErr(err)
+		return nil, nil, formatErr(err)
 	}
 
-	err = outbound.UnmarshalJSON(modifiedJson)
+	err = SJ.UnmarshalContext(ctx, modifiedJson, &outbound)
 	if err != nil {
-		return nil, formatErr(err)
+		return nil, nil, formatErr(err)
 	}
 
-	return &outbound, nil
+	return &outbound, nil, nil
 }
 
 func patchOutboundXray(base option.Outbound, configOpt HiddifyOptions, obj outboundMap, staticIpsDns map[string][]string) outboundMap {

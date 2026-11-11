@@ -46,8 +46,15 @@ const libName = "hiddify-core"
 
 func init() {
 	sharedFlags = append(sharedFlags, "-trimpath")
-	sharedFlags = append(sharedFlags, "-ldflags", "-s -w")
-	sharedTags = append(sharedTags, "with_gvisor", "with_quic", "with_wireguard", "with_ech", "with_utls", "with_clash_api", "with_grpc")
+	// -checklinkname=0: sing-box's libbox oomprofile linknames
+	// runtime/pprof internals (parseProcSelfMaps etc.); current Go
+	// toolchains reject those linknames unless the check is off.
+	// The symbols exist with matching signatures; the check is only
+	// a hardening measure, not a real mismatch.
+	sharedFlags = append(sharedFlags, "-ldflags", "-s -w -checklinkname=0")
+	// with_ech was removed: ECH moved to the stdlib in the Nov 2026 fork
+	// and the tag now deliberately breaks the build (ech_tag_stub.go).
+	sharedTags = append(sharedTags, "with_gvisor", "with_quic", "with_wireguard", "with_utls", "with_clash_api", "with_grpc", "with_openvpn")
 	iosTags = append(iosTags, "with_dhcp", "with_low_memory", "with_conntrack")
 }
 

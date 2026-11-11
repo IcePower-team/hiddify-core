@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,8 +10,10 @@ import (
 	"github.com/hiddify/hiddify-core/v2/config"
 	hcore "github.com/hiddify/hiddify-core/v2/hcore"
 	"github.com/sagernet/sing-box/experimental/libbox"
+	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
 
 	"github.com/spf13/cobra"
 )
@@ -118,8 +121,7 @@ func readConfigAt(path string) (*option.Options, error) {
 	if err != nil {
 		return nil, err
 	}
-	var options option.Options
-	err = options.UnmarshalJSON(content)
+	options, err := SJ.UnmarshalExtendedContext[option.Options](include.Context(context.Background()), content)
 	if err != nil {
 		return nil, err
 	}
@@ -127,8 +129,7 @@ func readConfigAt(path string) (*option.Options, error) {
 }
 
 func readConfigBytes(content []byte) (*option.Options, error) {
-	var options option.Options
-	err := options.UnmarshalJSON(content)
+	options, err := SJ.UnmarshalExtendedContext[option.Options](include.Context(context.Background()), content)
 	if err != nil {
 		return nil, err
 	}

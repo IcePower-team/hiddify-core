@@ -1,6 +1,7 @@
 package hcore
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -15,7 +16,9 @@ import (
 
 	"github.com/hiddify/hiddify-core/v2/config"
 
+	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
 )
 
 func RunStandalone(hiddifySettingPath string, configPath string, defaultConfig config.HiddifyOptions) error {
@@ -226,8 +229,7 @@ func updateConfigInterval(current ConfigResult, hiddifySettingPath string, confi
 }
 
 func readConfigBytes(content []byte) (*option.Options, error) {
-	var options option.Options
-	err := options.UnmarshalJSON(content)
+	options, err := SJ.UnmarshalExtendedContext[option.Options](include.Context(context.Background()), content)
 	if err != nil {
 		return nil, err
 	}

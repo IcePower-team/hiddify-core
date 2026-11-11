@@ -6,7 +6,8 @@ import (
 
 	hcommon "github.com/hiddify/hiddify-core/v2/hcommon"
 	"github.com/sagernet/sing-box/adapter"
-	"github.com/sagernet/sing-box/outbound"
+	groupproto "github.com/sagernet/sing-box/protocol/group"
+	"github.com/sagernet/sing/common/observable"
 	"github.com/sagernet/sing/service"
 	"google.golang.org/grpc"
 
@@ -21,7 +22,7 @@ func GetProxyInfo(detour adapter.Outbound) *OutboundInfo {
 		Tag:  detour.Tag(),
 		Type: detour.Type(),
 	}
-	url_test_history := static.Box.UrlTestHistory().LoadURLTestHistory(adapter.OutboundTag(detour))
+	url_test_history := static.Box.UrlTestHistory().LoadURLTestHistory(groupproto.RealTag(detour, "tcp"))
 	if url_test_history != nil {
 		out.UrlTestTime = timestamppb.New(url_test_history.Time)
 		out.UrlTestDelay = int32(url_test_history.Delay)
@@ -53,7 +54,7 @@ func GetAllProxiesInfo(onlyGroupitems bool) *OutboundGroupList {
 	}
 
 	cacheFile := service.FromContext[adapter.CacheFile](static.Box.Context())
-	outbounds := static.Box.GetInstance().Router().Outbounds()
+	outbounds := static.Box.GetInstance().Outbound().Outbounds()
 	outbounds_converted := make(map[string]*OutboundInfo, 0)
 	var iGroups []adapter.OutboundGroup
 	for _, it := range outbounds {
@@ -69,8 +70,11 @@ func GetAllProxiesInfo(onlyGroupitems bool) *OutboundGroupList {
 		var group OutboundGroup
 		group.Tag = iGroup.Tag()
 		group.Type = iGroup.Type()
-		_, group.Selectable = iGroup.(*outbound.Selector)
-		selectedTag := iGroup.Now()
+		_, group.Selectable = iGroup.(*groupproto.Selector)
+		selectedTag := ""
+		if selected := iGroup.Selected("tcp"); selected != nil {
+			selectedTag = selected.Tag()
+		}
 		group.Selected = outbounds_converted[selectedTag]
 		outbounds_converted[iGroup.Tag()].GroupSelectedOutbound = group.Selected
 		if cacheFile != nil {
@@ -112,11 +116,10 @@ func (s *CoreService) MainOutboundsInfo(req *hcommon.Empty, stream grpc.ServerSt
 }
 
 func AllProxiesInfoStream(stream grpc.ServerStreamingServer[OutboundGroupList], onlyMain bool) error {
-	urltestch, done, err := static.Box.UrlTestHistory().Observer().Subscribe()
-	defer static.Box.UrlTestHistory().Observer().UnSubscribe(urltestch)
-	if err != nil {
-		return err
-	}
+	urltestSubscriber := observable.NewSubscriber[struct{}](1)
+	static.Box.UrlTestHistory().AddUpdateHook(urltestSubscriber)
+	defer urltestSubscriber.Close()
+	urltestch, done := urltestSubscriber.Subscription()
 	stream.Send(GetAllProxiesInfo(onlyMain))
 	for {
 		select {

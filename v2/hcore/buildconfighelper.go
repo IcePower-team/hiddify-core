@@ -190,7 +190,9 @@ func removeTunnelIfNeeded(options *option.Options) (tuninb *option.TunInboundOpt
 
 	for _, inb := range options.Inbounds {
 		if inb.Type == C.TypeTun {
-			tuninb = &inb.TunOptions
+			if tunOpts, ok := inb.Options.(option.TunInboundOptions); ok {
+				tuninb = &tunOpts
+			}
 		} else {
 			newInbounds = append(newInbounds, inb)
 		}

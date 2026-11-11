@@ -10,7 +10,6 @@ import (
 	"github.com/hiddify/hiddify-core/v2/config"
 	"golang.org/x/net/proxy"
 
-	"github.com/sagernet/sing-box/experimental/libbox"
 	"github.com/sagernet/sing-box/option"
 )
 
@@ -70,7 +69,7 @@ func RunInstance(hiddifySettings *config.HiddifyOptions, singconfig *option.Opti
 }
 
 type HiddifyService struct {
-	libbox     *libbox.BoxService
+	libbox     *BoxService
 	ListenPort uint16
 }
 

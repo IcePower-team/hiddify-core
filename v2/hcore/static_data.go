@@ -10,7 +10,7 @@ import (
 )
 
 type HiddifyInstance struct {
-	Box            *libbox.BoxService
+	Box            *BoxService
 	HiddifyOptions *config.HiddifyOptions
 	// activeConfigPath string
 	CoreLogFactory            log.Factory

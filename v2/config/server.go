@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
 	"google.golang.org/grpc"
 )
 
@@ -39,7 +40,7 @@ func (s *server) GenerateFullConfig(ctx context.Context, in *GenerateConfigReque
 		return nil, err
 	}
 	var options option.Options
-	err = options.UnmarshalJSON(content)
+	err = SJ.UnmarshalContext(singboxContext(), content, &options)
 	if err != nil {
 		return nil, err
 	}

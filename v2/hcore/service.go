@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	runtimeDebug "runtime/debug"
 	"time"
 
 	"github.com/hiddify/hiddify-core/v2/config"
@@ -14,15 +13,12 @@ import (
 	"github.com/hiddify/hiddify-core/v2/hutils"
 	"github.com/hiddify/hiddify-core/v2/service_manager"
 
-	B "github.com/sagernet/sing-box"
-	"github.com/sagernet/sing-box/common/urltest"
 	"github.com/sagernet/sing-box/experimental/libbox"
+	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	E "github.com/sagernet/sing/common/exceptions"
-	"github.com/sagernet/sing/service"
-	"github.com/sagernet/sing/service/filemanager"
-	"github.com/sagernet/sing/service/pause"
+	"github.com/sagernet/sing/common/json"
 )
 
 var (
@@ -66,7 +62,6 @@ func Setup(params *SetupRequest, platformInterface libbox.PlatformInterface) err
 			BasePath:        params.BasePath,
 			WorkingPath:     params.WorkingDir,
 			TempPath:        params.TempDir,
-			IsTVOS:          !tcpConn,
 			FixAndroidStack: true,
 		})
 
@@ -132,35 +127,12 @@ func Setup(params *SetupRequest, platformInterface libbox.PlatformInterface) err
 	return InitHiddifyService()
 }
 
-func NewService(options option.Options) (*libbox.BoxService, error) {
-	runtimeDebug.FreeOSMemory()
-	ctx, cancel := context.WithCancel(context.Background())
-	ctx = filemanager.WithDefault(ctx, sWorkingPath, sTempPath, sUserID, sGroupID)
-	urlTestHistoryStorage := urltest.NewHistoryStorage()
-	ctx = service.ContextWithPtr(ctx, urlTestHistoryStorage)
-	instance, err := B.New(B.Options{
-		Context:           ctx,
-		Options:           options,
-		PlatformLogWriter: &LogInterface{},
-	})
-	if err != nil {
-		cancel()
-		return nil, E.Cause(err, "create service")
-	}
-	runtimeDebug.FreeOSMemory()
-	service := libbox.NewBoxService(
-		ctx,
-		cancel,
-		instance,
-		service.FromContext[pause.Manager](ctx),
-		urlTestHistoryStorage,
-	)
-	return &service, nil
+func NewService(options option.Options) (*BoxService, error) {
+	return newHService(options, nil)
 }
 
 func readOptions(configContent string) (option.Options, error) {
-	var options option.Options
-	err := options.UnmarshalJSON([]byte(configContent))
+	options, err := json.UnmarshalExtendedContext[option.Options](include.Context(context.Background()), []byte(configContent))
 	if err != nil {
 		return option.Options{}, E.Cause(err, "decode config")
 	}

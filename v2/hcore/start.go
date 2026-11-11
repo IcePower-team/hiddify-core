@@ -11,7 +11,6 @@ import (
 	"github.com/hiddify/hiddify-core/v2/db"
 	hcommon "github.com/hiddify/hiddify-core/v2/hcommon"
 	service_manager "github.com/hiddify/hiddify-core/v2/service_manager"
-	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/experimental/libbox"
 )
 
@@ -111,15 +110,8 @@ func StartService(in *StartRequest) (coreResponse *CoreInfoResponse, err error) 
 	}
 	Log(LogLevel_INFO, LogType_CORE, "Current Config is:\n", string(pout))
 
-	bopts := box.Options{
-		Options:           *options,
-		PlatformLogWriter: &LogInterface{},
-	}
-	if static.globalPlatformInterface != nil {
-		bopts.PlatformInterface = libbox.WrapPlatformInterface(static.globalPlatformInterface)
-	}
 	libbox.SetMemoryLimit(!in.DisableMemoryLimit)
-	instance, err := libbox.NewHService(bopts)
+	instance, err := newHService(*options, static.globalPlatformInterface)
 	if err != nil {
 		return errorWrapper(MessageType_CREATE_SERVICE, err)
 	}
@@ -133,7 +125,7 @@ func StartService(in *StartRequest) (coreResponse *CoreInfoResponse, err error) 
 		<-time.After(1000 * time.Millisecond)
 	}
 
-	instance.GetInstance().AddPostService("hiddifyMainServiceManager", &hiddifyMainServiceManager{})
+	instance.GetInstance().AddService(&hiddifyMainServiceManager{})
 
 	// if err := startCommandServer(instance); err != nil {
 	// 	return errorWrapper(MessageType_START_COMMAND_SERVER, err)
