@@ -5,14 +5,17 @@ package hcore
 */
 
 import (
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hiddify/hiddify-core/v2/config"
@@ -68,7 +71,14 @@ func StartHelloGrpcServer(listenAddressG string) (*grpc.Server, error) {
 var (
 	certpair   *hutils.CertificatePair
 	grpcServer map[SetupMode]*grpc.Server = make(map[SetupMode]*grpc.Server)
-	caCertPool                            = x509.NewCertPool()
+	// Client identities the app has registered, by SHA-256 of the raw
+	// certificate DER, resp. of the PKIX public-key DER. The server trusts a
+	// client exactly when it presents one of these; chain verification against
+	// a CA pool cannot work because the app's client certificate is a
+	// self-signed end-entity certificate, not a CA.
+	registeredMu            sync.Mutex
+	registeredClientCerts   = map[string]struct{}{}
+	registeredClientKeys    = map[string]struct{}{}
 )
 
 // StartGrpcServerByMode starts a gRPC server on the specified address with mTLS.
@@ -127,8 +137,12 @@ func StartGrpcServerByMode(listenAddressG string, mode SetupMode) (*grpc.Server,
 		// Create TLS credentials for the gRPC server
 		tlsConfig := &tls.Config{
 			Certificates: []tls.Certificate{serverCert},
-			ClientAuth:   tls.RequireAndVerifyClientCert, // Enforce mutual TLS (mTLS)
-			ClientCAs:    caCertPool,                     // Client CAs to verify client certificates
+			// Require a client certificate, but verify it against the
+			// registered identities (below) instead of a CA pool: the app's
+			// client certificate is self-signed and not a CA, so chain
+			// verification against ClientCAs can never accept it.
+			ClientAuth:            tls.RequireAnyClientCert,
+			VerifyPeerCertificate: verifyRegisteredClientCert,
 		}
 
 		// Create a new gRPC server with TLS credentials
@@ -167,25 +181,75 @@ func GetGrpcServerPublicKey() []byte {
 	return certpair.Certificate
 }
 
-// AddGrpcClientPublicKey adds a client's public key to the CA pool for verification.
+// AddGrpcClientPublicKey registers a client identity the gRPC server trusts:
+// either a "CERTIFICATE" PEM (the app's self-signed client certificate) or a
+// bare "PUBLIC KEY" PEM (legacy). Registration is by SHA-256 of the raw
+// certificate DER, resp. of the PKIX public-key DER.
 func AddGrpcClientPublicKey(clientPublicKey []byte) error {
 	block, _ := pem.Decode(clientPublicKey)
-	if block == nil || block.Type != "PUBLIC KEY" {
+	if block == nil {
 		return fmt.Errorf("failed to decode client public key")
 	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
+	switch block.Type {
+	case "CERTIFICATE":
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return fmt.Errorf("failed to parse client certificate: %v", err)
+		}
+		registeredMu.Lock()
+		registeredClientCerts[fmt.Sprintf("%x", sha256.Sum256(cert.Raw))] = struct{}{}
+		registeredClientKeys[pubKeyHash(cert.PublicKey)] = struct{}{}
+		registeredMu.Unlock()
+		return nil
+	case "PUBLIC KEY":
 		pubKey, err := x509.ParsePKIXPublicKey(block.Bytes)
 		if err != nil {
 			return fmt.Errorf("failed to parse client public key: %v", err)
 		}
-		cert = &x509.Certificate{
-			PublicKey: pubKey,
+		registeredMu.Lock()
+		registeredClientKeys[pubKeyHash(pubKey)] = struct{}{}
+		registeredMu.Unlock()
+		return nil
+	default:
+		return fmt.Errorf("failed to decode client public key")
+	}
+}
+
+func pubKeyHash(pubKey any) string {
+	der, err := x509.MarshalPKIXPublicKey(pubKey)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(der))
+}
+
+// verifyRegisteredClientCert accepts the handshake only when the client
+// presents a registered certificate (exact DER match) or a certificate whose
+// public key was registered. With no registration at all it rejects: the
+// server never serves an unregistered client.
+func verifyRegisteredClientCert(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+	if len(rawCerts) == 0 {
+		return errors.New("no client certificate presented")
+	}
+	registeredMu.Lock()
+	defer registeredMu.Unlock()
+	if len(registeredClientCerts) == 0 && len(registeredClientKeys) == 0 {
+		return errors.New("no client certificate registered")
+	}
+	sum := sha256.Sum256(rawCerts[0])
+	if _, ok := registeredClientCerts[fmt.Sprintf("%x", sum)]; ok {
+		return nil
+	}
+	cert, err := x509.ParseCertificate(rawCerts[0])
+	if err != nil {
+		return fmt.Errorf("failed to parse client certificate: %v", err)
+	}
+	if h := pubKeyHash(cert.PublicKey); h != "" {
+		if _, ok := registeredClientKeys[h]; ok {
+			return nil
 		}
 	}
-	caCertPool.AddCert(cert)
-
-	return nil
+	return errors.New("unknown client certificate")
 }
 
 func CloseGrpcServer(mode SetupMode) {
